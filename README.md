@@ -27,15 +27,27 @@ uv run python main.py
 
 ```bash
 uv run pyinstaller --noconfirm --onefile --windowed \
-    --name MeetingRecorder --collect-all soundcard main.py
+    --name MeetingRecorder --icon icon.ico --add-data "icon.ico;." \
+    --collect-all soundcard main.py
 ```
 
-生成的文件位于 `dist\MeetingRecorder.exe`（单文件，约 28 MB）。
+生成的文件位于 `dist\MeetingRecorder.exe`（单文件，约 30 MB）。
+
+## 图标
+
+- 源文件为 `icon.svg`（麦克风），用 `make_icon.py` 渲染成多尺寸 `icon.ico`：
+
+  ```bash
+  uv run python make_icon.py
+  ```
+
+- `icon.ico` 既作为 exe 图标（`--icon`），也在运行时随包打入用作托盘图标；
+  录音时托盘图标右下角会叠加红点表示「录音中」。
 
 ## 技术说明
 
 - **录音**：`soundcard` 库，通过 Windows WASAPI loopback 抓取默认扬声器输出，同时录制默认麦克风；两路各用一个线程，停止时按较短长度对齐并相加混音。
-- **托盘**：`pystray` + `Pillow` 动态生成图标。
+- **托盘**：`pystray` + `Pillow`，底图为麦克风图标，录音时叠加红点。
 - 输出为 48 kHz、双声道、16-bit PCM WAV。
 
 ## 已知限制 / 可扩展方向

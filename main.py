@@ -21,12 +21,20 @@ from config import Config
 from recorder import AudioRecorder, RecorderError
 
 APP_NAME = "会议录音机"
+ICON_FILE = "icon.ico"
+
+
+def resource_path(name: str) -> str:
+    """兼容 PyInstaller onefile：解析打包后资源的真实路径。"""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
 
 
 class TrayApp:
     def __init__(self) -> None:
         self.config = Config.load()
         self.recorder = AudioRecorder(self.config)
+        self._base_icon = self._load_base_icon()
         self.icon = pystray.Icon(
             "meeting_recorder",
             icon=self._make_icon(recording=False),
@@ -35,7 +43,30 @@ class TrayApp:
         )
 
     # ---- 图标 -----------------------------------------------------------
+    def _load_base_icon(self) -> Image.Image | None:
+        """加载麦克风图标作为托盘底图；失败则返回 None 走绘制后备。"""
+        try:
+            img = Image.open(resource_path(ICON_FILE)).convert("RGBA")
+            return img.resize((64, 64), Image.LANCZOS)
+        except Exception:  # noqa: BLE001
+            return None
+
     def _make_icon(self, recording: bool) -> Image.Image:
+        base = self._base_icon
+        if base is None:
+            return self._make_fallback_icon(recording)
+
+        img = base.copy()
+        if recording:
+            # 右下角叠加红点表示「录音中」
+            draw = ImageDraw.Draw(img)
+            s = img.size[0]
+            r = s * 5 // 16
+            box = (s - r - 1, s - r - 1, s - 1, s - 1)
+            draw.ellipse(box, fill=(230, 40, 40, 255), outline=(255, 255, 255, 255), width=2)
+        return img
+
+    def _make_fallback_icon(self, recording: bool) -> Image.Image:
         size = 64
         img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
