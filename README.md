@@ -32,6 +32,8 @@ uv run python main.py
 
 ## 重新打包 exe
 
+直接双击运行 `build.bat`（会自动同步依赖并打包），或在命令行执行：
+
 ```bash
 uv run pyinstaller --noconfirm --onefile --windowed \
     --name MeetingRecorder --icon icon.ico \
