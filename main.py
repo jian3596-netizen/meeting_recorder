@@ -1,8 +1,8 @@
 """会议录音机 —— 常驻系统托盘的轻量录音工具。
 
 启动后默认最小化到系统托盘后台运行。
-左键单击托盘图标：开始 / 停止录音。
-右键菜单：开始/停止、设置（录音源、设备、保存路径）、打开文件夹、退出。
+左键双击托盘图标：开始 / 停止录音。
+右键菜单：开始/停止、设置（录音源、设备）、打开文件夹、退出。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pystray
@@ -32,6 +33,8 @@ class TrayApp:
         self.recorder = AudioRecorder(self.config)
         self._auto_started = False     # 本次录音是否由自动探测发起
         self._prompt_open = False      # 是否已有「是否录音」弹窗在显示
+        self._last_click: float | None = None  # 上次托盘左键点击时间（识别双击）
+        self._dbl_threshold = _double_click_seconds()
         self.detector: MeetingDetector | None = None
         self.icon = pystray.Icon(
             "meeting_recorder",
@@ -61,11 +64,13 @@ class TrayApp:
     def _build_menu(self) -> Menu:
         recording = self.recorder.is_recording
         return Menu(
+            # 菜单里的项：单击即切换（这是用户主动点菜单）
             Item(
                 "■ 停止录音" if recording else "● 开始录音",
-                self.on_toggle,
-                default=True,  # 左键单击触发
+                self._menu_toggle,
             ),
+            # 隐藏的默认项：响应托盘图标左键点击，用于识别「双击」
+            Item("", self._on_icon_click, default=True, visible=False),
             Menu.SEPARATOR,
             Item("设置", self._settings_menu()),
             Item("打开录音文件夹", self.on_open_folder),
@@ -147,12 +152,25 @@ class TrayApp:
         return Menu(*items)
 
     # ---- 录音动作 -------------------------------------------------------
-    def on_toggle(self, icon=None, item=None) -> None:
+    def _do_toggle(self) -> None:
         if self.recorder.is_recording:
             self._stop()
         else:
             self._auto_started = False  # 手动开始的录音不随会议结束自动停止
             self._start()
+
+    def _menu_toggle(self, icon=None, item=None) -> None:
+        # 从右键菜单点击：单击即切换
+        self._do_toggle()
+
+    def _on_icon_click(self, icon=None, item=None) -> None:
+        # 托盘图标左键：双击才切换（两次点击间隔在系统双击时间内）
+        now = time.monotonic()
+        if self._last_click is not None and now - self._last_click <= self._dbl_threshold:
+            self._last_click = None
+            self._do_toggle()
+        else:
+            self._last_click = now
 
     def _start(self) -> None:
         try:
@@ -264,6 +282,20 @@ class TrayApp:
         if self.config.auto_detect:
             self._start_detector()
         self.icon.run()
+
+
+def _double_click_seconds() -> float:
+    """系统双击判定时间（秒）；非 Windows 或获取失败时回退 0.5s。"""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ms = ctypes.windll.user32.GetDoubleClickTime()
+            if ms:
+                return ms / 1000.0
+        except Exception:  # noqa: BLE001
+            pass
+    return 0.5
 
 
 def _open_in_explorer(folder: Path) -> None:
