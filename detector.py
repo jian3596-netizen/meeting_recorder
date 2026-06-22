@@ -7,8 +7,11 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Callable
+
+log = logging.getLogger("detector")
 
 try:
     import winreg
@@ -113,7 +116,7 @@ class MeetingDetector(threading.Thread):
         try:
             fn(label)
         except Exception:  # noqa: BLE001  回调异常不应中断探测循环
-            pass
+            log.exception("会议探测回调出错")
 
     def stop(self) -> None:
         self._stop_event.set()

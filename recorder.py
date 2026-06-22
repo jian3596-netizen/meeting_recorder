@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import wave
 from datetime import datetime
@@ -15,6 +16,8 @@ import numpy as np
 import soundcard as sc
 
 from config import Config
+
+log = logging.getLogger("recorder")
 
 SAMPLERATE = 48000
 CHANNELS = 2
@@ -71,6 +74,7 @@ class AudioRecorder:
                     )
                 )
             except Exception as exc:  # noqa: BLE001
+                log.exception("无法打开系统音频")
                 self._errors.append(f"无法打开系统音频: {exc}")
 
         if self.config.record_mic:
@@ -84,6 +88,7 @@ class AudioRecorder:
                     )
                 )
             except Exception as exc:  # noqa: BLE001
+                log.exception("无法打开麦克风")
                 self._errors.append(f"无法打开麦克风: {exc}")
 
         if not self._threads:
@@ -136,6 +141,7 @@ class AudioRecorder:
                 while self._recording:
                     sink.append(rec.record(numframes=CHUNK))
         except Exception as exc:  # noqa: BLE001
+            log.exception("%s 录制中断", label)
             self._errors.append(f"{label} 录制中断: {exc}")
 
     def _mix(self) -> np.ndarray | None:

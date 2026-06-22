@@ -7,10 +7,13 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import sys
 import threading
 from typing import Any
+
+log = logging.getLogger("toast")
 
 _BG = "#f6f7f9"          # 浅色背景
 _FG = "#1b1b1d"          # 主文字
@@ -175,6 +178,7 @@ class ToastManager:
                     req.title, req.message, req.buttons, req.timeout, req.default
                 )
             except Exception:  # noqa: BLE001
+                log.exception("显示气泡出错")
                 req.result = req.default
             finally:
                 req.done.set()

@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import functools
+import logging
 import os
 import subprocess
 import sys
@@ -19,14 +21,34 @@ import soundcard as sc
 from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem as Item
 
+import applog
 import toast
 from config import Config
 from detector import MeetingDetector
 from recorder import AudioRecorder, RecorderError
 
+log = logging.getLogger("main")
+
 APP_NAME = "会议录音机"
 MAX_DURATION_SEC = 2 * 60 * 60     # 录音最大时长 2 小时
 WARN_BEFORE_SEC = 10 * 60          # 距上限 10 分钟时提示
+
+
+def _safe_action(fn):
+    """包裹托盘回调 / 后台动作：出错记日志，避免异常搞挂 pystray 消息循环。"""
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return fn(self, *args, **kwargs)
+        except Exception:  # noqa: BLE001
+            log.exception("操作出错：%s", fn.__name__)
+            try:
+                self._notify("出错了", f"{fn.__name__} 执行失败，详见 error.log")
+            except Exception:  # noqa: BLE001
+                pass
+
+    return wrapper
 
 
 class TrayApp:
@@ -162,10 +184,12 @@ class TrayApp:
         else:
             self._start()
 
+    @_safe_action
     def _menu_toggle(self, icon=None, item=None) -> None:
         # 从右键菜单点击：单击即切换
         self._do_toggle()
 
+    @_safe_action
     def _on_icon_click(self, icon=None, item=None) -> None:
         # 托盘图标左键：双击才切换（两次点击间隔在系统双击时间内）
         now = time.monotonic()
@@ -211,6 +235,7 @@ class TrayApp:
                 t.cancel()
         self._warn_timer = self._max_timer = None
 
+    @_safe_action
     def _on_duration_warning(self) -> None:
         if not self.recorder.is_recording:
             return
@@ -223,11 +248,13 @@ class TrayApp:
         if stop and self.recorder.is_recording:
             self._stop()
 
+    @_safe_action
     def _on_duration_max(self) -> None:
         if self.recorder.is_recording:
             self._stop(reason="已达 2 小时上限，录音已自动保存")
 
     # ---- 自动探测会议 ---------------------------------------------------
+    @_safe_action
     def _toggle_auto_detect(self, icon=None, item=None) -> None:
         self.config.auto_detect = not self.config.auto_detect
         self.config.save()
@@ -250,6 +277,7 @@ class TrayApp:
             self.detector.stop()
             self.detector = None
 
+    @_safe_action
     def _on_meeting_start(self, label: str) -> None:
         # 已在录音 / 已有弹窗时不再打扰
         if self.recorder.is_recording or self._prompt_open:
@@ -259,6 +287,7 @@ class TrayApp:
             target=self._prompt_start, args=(label,), daemon=True
         ).start()
 
+    @_safe_action
     def _prompt_start(self, label: str) -> None:
         try:
             yes = self.toasts.ask(
@@ -272,6 +301,7 @@ class TrayApp:
         finally:
             self._prompt_open = False
 
+    @_safe_action
     def _on_meeting_end(self, label: str) -> None:
         # 会议结束（会议软件停止占用麦克风）：若在录音则询问是否停止
         if not self.recorder.is_recording:
@@ -280,6 +310,7 @@ class TrayApp:
             target=self._prompt_end, args=(label,), daemon=True
         ).start()
 
+    @_safe_action
     def _prompt_end(self, label: str) -> None:
         stop = self.toasts.ask(
             f"「{label}」会议已结束",
@@ -291,10 +322,12 @@ class TrayApp:
             self._stop()
 
     # ---- 设置动作 -------------------------------------------------------
+    @_safe_action
     def _toggle_system(self, icon=None, item=None) -> None:
         self.config.record_system = not self.config.record_system
         self.config.save()
 
+    @_safe_action
     def _toggle_mic(self, icon=None, item=None) -> None:
         self.config.record_mic = not self.config.record_mic
         self.config.save()
@@ -311,11 +344,13 @@ class TrayApp:
             self.config.save()
         return handler
 
+    @_safe_action
     def on_open_folder(self, icon=None, item=None) -> None:
         folder = self.config.output_path
         folder.mkdir(parents=True, exist_ok=True)
         _open_in_explorer(folder)
 
+    @_safe_action
     def on_quit(self, icon=None, item=None) -> None:
         self._stop_detector()
         self._cancel_duration_timers()
@@ -358,7 +393,12 @@ def _open_in_explorer(folder: Path) -> None:
 
 
 def main() -> None:
-    TrayApp().run()
+    applog.setup()
+    try:
+        TrayApp().run()
+    except Exception:  # noqa: BLE001
+        log.exception("程序异常退出")
+        raise
 
 
 if __name__ == "__main__":

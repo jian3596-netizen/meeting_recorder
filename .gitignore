@@ -14,3 +14,6 @@ wheels/
 
 # 录音输出
 *.wav
+
+# 运行日志
+error.log
