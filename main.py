@@ -25,16 +25,20 @@ from detector import MeetingDetector
 from recorder import AudioRecorder, RecorderError
 
 APP_NAME = "会议录音机"
+MAX_DURATION_SEC = 2 * 60 * 60     # 录音最大时长 2 小时
+WARN_BEFORE_SEC = 10 * 60          # 距上限 10 分钟时提示
 
 
 class TrayApp:
     def __init__(self) -> None:
         self.config = Config.load()
         self.recorder = AudioRecorder(self.config)
-        self._auto_started = False     # 本次录音是否由自动探测发起
-        self._prompt_open = False      # 是否已有「是否录音」弹窗在显示
+        self.toasts = toast.ToastManager()
+        self._prompt_open = False      # 是否已有「是否录音」气泡在显示
         self._last_click: float | None = None  # 上次托盘左键点击时间（识别双击）
         self._dbl_threshold = _double_click_seconds()
+        self._warn_timer: threading.Timer | None = None
+        self._max_timer: threading.Timer | None = None
         self.detector: MeetingDetector | None = None
         self.icon = pystray.Icon(
             "meeting_recorder",
@@ -156,7 +160,6 @@ class TrayApp:
         if self.recorder.is_recording:
             self._stop()
         else:
-            self._auto_started = False  # 手动开始的录音不随会议结束自动停止
             self._start()
 
     def _menu_toggle(self, icon=None, item=None) -> None:
@@ -179,16 +182,50 @@ class TrayApp:
             self._notify("无法开始录音", str(exc))
             return
         self._refresh()
-        self._notify(APP_NAME, "录音已开始")
+        self._start_duration_timers()
+        self._notify("录音已开始", "正在录制系统音频 + 麦克风")
 
-    def _stop(self) -> None:
+    def _stop(self, reason: str | None = None) -> None:
+        self._cancel_duration_timers()
         path = self.recorder.stop()
         self._refresh()
         if path is not None:
-            self._notify("录音已保存", path.name)
+            self._notify(reason or "录音已保存", path.name)
         else:
             msg = "；".join(self.recorder.errors) or "未捕获到音频"
             self._notify("录音结束", msg)
+
+    # ---- 最大时长控制 ---------------------------------------------------
+    def _start_duration_timers(self) -> None:
+        self._cancel_duration_timers()
+        warn_after = max(1, MAX_DURATION_SEC - WARN_BEFORE_SEC)
+        self._warn_timer = threading.Timer(warn_after, self._on_duration_warning)
+        self._max_timer = threading.Timer(MAX_DURATION_SEC, self._on_duration_max)
+        for t in (self._warn_timer, self._max_timer):
+            t.daemon = True
+            t.start()
+
+    def _cancel_duration_timers(self) -> None:
+        for t in (self._warn_timer, self._max_timer):
+            if t is not None:
+                t.cancel()
+        self._warn_timer = self._max_timer = None
+
+    def _on_duration_warning(self) -> None:
+        if not self.recorder.is_recording:
+            return
+        stop = self.toasts.ask(
+            "录音即将达到 2 小时上限",
+            "还剩约 10 分钟，是否现在停止并保存？",
+            [("现在停止", True, "accent"), ("继续录制", False, "normal")],
+            default=False,
+        )
+        if stop and self.recorder.is_recording:
+            self._stop()
+
+    def _on_duration_max(self) -> None:
+        if self.recorder.is_recording:
+            self._stop(reason="已达 2 小时上限，录音已自动保存")
 
     # ---- 自动探测会议 ---------------------------------------------------
     def _toggle_auto_detect(self, icon=None, item=None) -> None:
@@ -219,25 +256,38 @@ class TrayApp:
             return
         self._prompt_open = True
         threading.Thread(
-            target=self._prompt_record, args=(label,), daemon=True
+            target=self._prompt_start, args=(label,), daemon=True
         ).start()
 
-    def _prompt_record(self, label: str) -> None:
+    def _prompt_start(self, label: str) -> None:
         try:
-            yes = toast.ask_record(
+            yes = self.toasts.ask(
                 f"检测到「{label}」会议",
                 "是否开始录音？",
+                [("开始录音", True, "accent"), ("忽略", False, "normal")],
+                default=False,
             )
             if yes and not self.recorder.is_recording:
-                self._auto_started = True
                 self._start()
         finally:
             self._prompt_open = False
 
     def _on_meeting_end(self, label: str) -> None:
-        # 仅自动开始的录音才随会议结束自动停止保存
-        if self._auto_started and self.recorder.is_recording:
-            self._auto_started = False
+        # 会议结束（会议软件停止占用麦克风）：若在录音则询问是否停止
+        if not self.recorder.is_recording:
+            return
+        threading.Thread(
+            target=self._prompt_end, args=(label,), daemon=True
+        ).start()
+
+    def _prompt_end(self, label: str) -> None:
+        stop = self.toasts.ask(
+            f"「{label}」会议已结束",
+            "是否停止录音？",
+            [("停止录音", True, "accent"), ("继续录音", False, "normal")],
+            default=False,
+        )
+        if stop and self.recorder.is_recording:
             self._stop()
 
     # ---- 设置动作 -------------------------------------------------------
@@ -268,15 +318,15 @@ class TrayApp:
 
     def on_quit(self, icon=None, item=None) -> None:
         self._stop_detector()
+        self._cancel_duration_timers()
         if self.recorder.is_recording:
             self.recorder.stop()
+        self.toasts.stop()
         self.icon.stop()
 
     def _notify(self, title: str, message: str) -> None:
-        try:
-            self.icon.notify(message, title)
-        except Exception:  # noqa: BLE001
-            pass
+        # 状态提示统一用气泡卡片样式
+        self.toasts.info(title, message)
 
     def run(self) -> None:
         if self.config.auto_detect:
