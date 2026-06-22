@@ -1,0 +1,20 @@
+[project]
+name = "meeting-recorder"
+version = "0.1.0"
+description = "常驻系统托盘的轻量会议录音工具（系统音频 + 麦克风）"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "soundcard>=0.4.3",
+    "numpy>=1.26",
+    "pystray>=0.19.5",
+    "pillow>=10.0",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+meeting-recorder = "main:main"
