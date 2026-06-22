@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import ctypes
 import os
 import subprocess
 import sys
@@ -19,6 +18,7 @@ import soundcard as sc
 from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem as Item
 
+import toast
 from config import Config
 from detector import MeetingDetector
 from recorder import AudioRecorder, RecorderError
@@ -206,8 +206,9 @@ class TrayApp:
 
     def _prompt_record(self, label: str) -> None:
         try:
-            yes = _ask_yes_no(
-                APP_NAME, f"检测到你正在使用「{label}」开会，是否开始录音？"
+            yes = toast.ask_record(
+                f"检测到「{label}」会议",
+                "是否开始录音？",
             )
             if yes and not self.recorder.is_recording:
                 self._auto_started = True
@@ -263,21 +264,6 @@ class TrayApp:
         if self.config.auto_detect:
             self._start_detector()
         self.icon.run()
-
-
-def _ask_yes_no(title: str, text: str) -> bool:
-    """Windows 原生「是/否」对话框（user32.MessageBox，线程安全）。"""
-    if sys.platform != "win32":
-        return False
-    MB_YESNO = 0x00000004
-    MB_ICONQUESTION = 0x00000020
-    MB_SETFOREGROUND = 0x00010000
-    MB_TOPMOST = 0x00040000
-    IDYES = 6
-    res = ctypes.windll.user32.MessageBoxW(
-        0, text, title, MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST
-    )
-    return res == IDYES
 
 
 def _open_in_explorer(folder: Path) -> None:
