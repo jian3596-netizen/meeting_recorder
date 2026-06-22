@@ -70,7 +70,7 @@ class TrayApp:
         return Menu(
             # 菜单里的项：单击即切换（这是用户主动点菜单）
             Item(
-                "■ 停止录音" if recording else "● 开始录音",
+                "停止录音" if recording else "开始录音",
                 self._menu_toggle,
             ),
             # 隐藏的默认项：响应托盘图标左键点击，用于识别「双击」
