@@ -94,11 +94,6 @@ class TrayApp:
             Menu.SEPARATOR,
             Item("扬声器设备", self._speaker_menu()),
             Item("麦克风设备", self._mic_menu()),
-            Menu.SEPARATOR,
-            Item(
-                lambda _i: f"保存目录：{self.config.output_dir}（点击打开）",
-                self.on_open_folder,
-            ),
         )
 
     def _speaker_menu(self) -> Menu:
