@@ -96,8 +96,8 @@ class TrayApp:
             Item("麦克风设备", self._mic_menu()),
             Menu.SEPARATOR,
             Item(
-                lambda _i: f"保存路径：{self.config.output_dir}",
-                self.on_choose_folder,
+                lambda _i: f"保存目录：{self.config.output_dir}（点击打开）",
+                self.on_open_folder,
             ),
         )
 
@@ -247,14 +247,6 @@ class TrayApp:
             self.config.save()
         return handler
 
-    def on_choose_folder(self, icon=None, item=None) -> None:
-        chosen = _ask_directory(self.config.output_dir)
-        if chosen:
-            self.config.output_dir = chosen
-            self.config.save()
-            self.icon.update_menu()
-            self._notify("保存路径已更新", chosen)
-
     def on_open_folder(self, icon=None, item=None) -> None:
         folder = self.config.output_path
         folder.mkdir(parents=True, exist_ok=True)
@@ -291,86 +283,6 @@ def _ask_yes_no(title: str, text: str) -> bool:
         0, text, title, MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST
     )
     return res == IDYES
-
-
-def _ask_directory(initial: str) -> str | None:
-    """弹出文件夹选择对话框。
-
-    pystray 在 Windows 上从子线程调用菜单回调，而 tkinter 必须运行在主线程，
-    在子线程弹 tkinter 对话框会死锁。因此 Windows 下改用原生 shell 对话框
-    （ctypes 调用 shell32，可在任意线程安全使用）。
-    """
-    if sys.platform == "win32":
-        return _ask_directory_win()
-    return _ask_directory_tk(initial)
-
-
-def _ask_directory_win() -> str | None:
-    """Windows 原生「浏览文件夹」对话框（SHBrowseForFolder）。"""
-    import ctypes
-    from ctypes import wintypes
-
-    ole32 = ctypes.windll.ole32
-    shell32 = ctypes.windll.shell32
-
-    class BROWSEINFO(ctypes.Structure):
-        _fields_ = [
-            ("hwndOwner", wintypes.HWND),
-            ("pidlRoot", ctypes.c_void_p),
-            ("pszDisplayName", wintypes.LPWSTR),
-            ("lpszTitle", wintypes.LPCWSTR),
-            ("ulFlags", wintypes.UINT),
-            ("lpfn", ctypes.c_void_p),
-            ("lParam", wintypes.LPARAM),
-            ("iImage", ctypes.c_int),
-        ]
-
-    BIF_RETURNONLYFSDIRS = 0x00000001
-    BIF_NEWDIALOGSTYLE = 0x00000040
-
-    shell32.SHBrowseForFolderW.restype = ctypes.c_void_p
-    shell32.SHGetPathFromIDListW.argtypes = [ctypes.c_void_p, wintypes.LPWSTR]
-
-    # NEWDIALOGSTYLE 需要 STA 的 COM 单元
-    ole32.CoInitialize(None)
-    try:
-        display = ctypes.create_unicode_buffer(260)
-        bi = BROWSEINFO()
-        bi.hwndOwner = None
-        bi.pszDisplayName = ctypes.cast(display, wintypes.LPWSTR)
-        bi.lpszTitle = "选择录音保存文件夹"
-        bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE
-
-        pidl = shell32.SHBrowseForFolderW(ctypes.byref(bi))
-        if not pidl:
-            return None
-        try:
-            path_buf = ctypes.create_unicode_buffer(260)
-            if shell32.SHGetPathFromIDListW(pidl, path_buf):
-                return path_buf.value or None
-        finally:
-            ole32.CoTaskMemFree(pidl)
-        return None
-    finally:
-        ole32.CoUninitialize()
-
-
-def _ask_directory_tk(initial: str) -> str | None:
-    """非 Windows 平台的后备：tkinter 文件夹对话框。"""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception:  # noqa: BLE001
-        return None
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    try:
-        chosen = filedialog.askdirectory(initialdir=initial or os.getcwd())
-    finally:
-        root.destroy()
-    return chosen or None
 
 
 def _open_in_explorer(folder: Path) -> None:
