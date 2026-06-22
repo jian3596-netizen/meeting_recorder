@@ -30,6 +30,7 @@ class Config:
     record_mic: bool = True             # 录制麦克风
     speaker_name: str = ""              # 指定扬声器；空 = 系统默认
     mic_name: str = ""                  # 指定麦克风；空 = 系统默认
+    auto_detect: bool = True            # 自动探测会议（Teams/腾讯会议）并提示录音
 
     def __post_init__(self) -> None:
         if not self.output_dir:

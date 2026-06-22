@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pystray
@@ -18,23 +20,19 @@ from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem as Item
 
 from config import Config
+from detector import MeetingDetector
 from recorder import AudioRecorder, RecorderError
 
 APP_NAME = "会议录音机"
-ICON_FILE = "icon.ico"
-
-
-def resource_path(name: str) -> str:
-    """兼容 PyInstaller onefile：解析打包后资源的真实路径。"""
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, name)
 
 
 class TrayApp:
     def __init__(self) -> None:
         self.config = Config.load()
         self.recorder = AudioRecorder(self.config)
-        self._base_icon = self._load_base_icon()
+        self._auto_started = False     # 本次录音是否由自动探测发起
+        self._prompt_open = False      # 是否已有「是否录音」弹窗在显示
+        self.detector: MeetingDetector | None = None
         self.icon = pystray.Icon(
             "meeting_recorder",
             icon=self._make_icon(recording=False),
@@ -43,30 +41,7 @@ class TrayApp:
         )
 
     # ---- 图标 -----------------------------------------------------------
-    def _load_base_icon(self) -> Image.Image | None:
-        """加载麦克风图标作为托盘底图；失败则返回 None 走绘制后备。"""
-        try:
-            img = Image.open(resource_path(ICON_FILE)).convert("RGBA")
-            return img.resize((64, 64), Image.LANCZOS)
-        except Exception:  # noqa: BLE001
-            return None
-
     def _make_icon(self, recording: bool) -> Image.Image:
-        base = self._base_icon
-        if base is None:
-            return self._make_fallback_icon(recording)
-
-        img = base.copy()
-        if recording:
-            # 右下角叠加红点表示「录音中」
-            draw = ImageDraw.Draw(img)
-            s = img.size[0]
-            r = s * 5 // 16
-            box = (s - r - 1, s - r - 1, s - 1, s - 1)
-            draw.ellipse(box, fill=(230, 40, 40, 255), outline=(255, 255, 255, 255), width=2)
-        return img
-
-    def _make_fallback_icon(self, recording: bool) -> Image.Image:
         size = 64
         img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -100,6 +75,12 @@ class TrayApp:
 
     def _settings_menu(self) -> Menu:
         return Menu(
+            Item(
+                "自动探测会议（Teams / 腾讯会议）",
+                self._toggle_auto_detect,
+                checked=lambda _i: self.config.auto_detect,
+            ),
+            Menu.SEPARATOR,
             Item(
                 "录音源 → 系统音频",
                 self._toggle_system,
@@ -175,6 +156,7 @@ class TrayApp:
         if self.recorder.is_recording:
             self._stop()
         else:
+            self._auto_started = False  # 手动开始的录音不随会议结束自动停止
             self._start()
 
     def _start(self) -> None:
@@ -194,6 +176,55 @@ class TrayApp:
         else:
             msg = "；".join(self.recorder.errors) or "未捕获到音频"
             self._notify("录音结束", msg)
+
+    # ---- 自动探测会议 ---------------------------------------------------
+    def _toggle_auto_detect(self, icon=None, item=None) -> None:
+        self.config.auto_detect = not self.config.auto_detect
+        self.config.save()
+        if self.config.auto_detect:
+            self._start_detector()
+        else:
+            self._stop_detector()
+
+    def _start_detector(self) -> None:
+        if self.detector is not None:
+            return
+        self.detector = MeetingDetector(
+            on_start=self._on_meeting_start,
+            on_stop=self._on_meeting_end,
+        )
+        self.detector.start()
+
+    def _stop_detector(self) -> None:
+        if self.detector is not None:
+            self.detector.stop()
+            self.detector = None
+
+    def _on_meeting_start(self, label: str) -> None:
+        # 已在录音 / 已有弹窗时不再打扰
+        if self.recorder.is_recording or self._prompt_open:
+            return
+        self._prompt_open = True
+        threading.Thread(
+            target=self._prompt_record, args=(label,), daemon=True
+        ).start()
+
+    def _prompt_record(self, label: str) -> None:
+        try:
+            yes = _ask_yes_no(
+                APP_NAME, f"检测到你正在使用「{label}」开会，是否开始录音？"
+            )
+            if yes and not self.recorder.is_recording:
+                self._auto_started = True
+                self._start()
+        finally:
+            self._prompt_open = False
+
+    def _on_meeting_end(self, label: str) -> None:
+        # 仅自动开始的录音才随会议结束自动停止保存
+        if self._auto_started and self.recorder.is_recording:
+            self._auto_started = False
+            self._stop()
 
     # ---- 设置动作 -------------------------------------------------------
     def _toggle_system(self, icon=None, item=None) -> None:
@@ -230,6 +261,7 @@ class TrayApp:
         _open_in_explorer(folder)
 
     def on_quit(self, icon=None, item=None) -> None:
+        self._stop_detector()
         if self.recorder.is_recording:
             self.recorder.stop()
         self.icon.stop()
@@ -241,7 +273,24 @@ class TrayApp:
             pass
 
     def run(self) -> None:
+        if self.config.auto_detect:
+            self._start_detector()
         self.icon.run()
+
+
+def _ask_yes_no(title: str, text: str) -> bool:
+    """Windows 原生「是/否」对话框（user32.MessageBox，线程安全）。"""
+    if sys.platform != "win32":
+        return False
+    MB_YESNO = 0x00000004
+    MB_ICONQUESTION = 0x00000020
+    MB_SETFOREGROUND = 0x00010000
+    MB_TOPMOST = 0x00040000
+    IDYES = 6
+    res = ctypes.windll.user32.MessageBoxW(
+        0, text, title, MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST
+    )
+    return res == IDYES
 
 
 def _ask_directory(initial: str) -> str | None:
