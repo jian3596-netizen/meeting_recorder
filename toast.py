@@ -100,10 +100,7 @@ def show_toast(
     tk.Label(
         frame, text=message, bg=_BG, fg=_SUB,
         font=(_FONT, 9), anchor="w", justify="left", wraplength=300,
-    ).pack(fill="x", padx=16, pady=(0, 12))
-
-    btns = tk.Frame(frame, bg=_BG)
-    btns.pack(fill="x", padx=16, pady=(0, 14))
+    ).pack(fill="x", padx=16, pady=(0, 14 if not buttons else 12))
 
     def choose(value: Any) -> None:
         result["value"] = value
@@ -112,16 +109,19 @@ def show_toast(
         except Exception:  # noqa: BLE001
             pass
 
-    for text, value, style in buttons:
-        accent = style == "accent"
-        fg = _ACCENT_FG if accent else _NORMAL_FG
-        bg = _ACCENT if accent else _NORMAL_BG
-        tk.Button(
-            btns, text=text, command=lambda v=value: choose(v),
-            fg=fg, bg=bg, activebackground=bg, activeforeground=fg,
-            relief="flat", bd=0, padx=16, pady=6,
-            font=(_FONT, 9, "bold"), cursor="hand2",
-        ).pack(side="right", padx=(8, 0))
+    if buttons:
+        btns = tk.Frame(frame, bg=_BG)
+        btns.pack(fill="x", padx=16, pady=(0, 14))
+        for text, value, style in buttons:
+            accent = style == "accent"
+            fg = _ACCENT_FG if accent else _NORMAL_FG
+            bg = _ACCENT if accent else _NORMAL_BG
+            tk.Button(
+                btns, text=text, command=lambda v=value: choose(v),
+                fg=fg, bg=bg, activebackground=bg, activeforeground=fg,
+                relief="flat", bd=0, padx=16, pady=6,
+                font=(_FONT, 9, "bold"), cursor="hand2",
+            ).pack(side="right", padx=(8, 0))
 
     # 定位到工作区右下角
     root.update_idletasks()
@@ -193,9 +193,9 @@ class ToastManager:
         req.done.wait()
         return req.result
 
-    def info(self, title: str, message: str, timeout: int = 5) -> None:
-        """显示状态气泡（即发即忘，自动消失）。"""
-        req = _Request(title, message, [("知道了", True, "normal")], timeout, True)
+    def info(self, title: str, message: str, timeout: int = 2) -> None:
+        """显示状态气泡（无按钮，2 秒后自动消失）。"""
+        req = _Request(title, message, [], timeout, True)
         self._q.put(req)
 
     def stop(self) -> None:
