@@ -57,6 +57,7 @@ class TrayApp:
         self.recorder = AudioRecorder(self.config)
         self.toasts = toast.ToastManager()
         self._meeting_prompt_open = False  # 是否已有会议提示气泡在显示（限一个）
+        self._auto_start_meetings = False  # 已点过「开始录音」后，本次运行内直接开录
         self._last_click: float | None = None  # 上次托盘左键点击时间（识别双击）
         self._dbl_threshold = _double_click_seconds()
         self._warn_timer: threading.Timer | None = None
@@ -282,6 +283,10 @@ class TrayApp:
         # 已在录音 / 已有会议提示时不再打扰
         if self.recorder.is_recording or self._meeting_prompt_open:
             return
+        # 本次运行内已点过「开始录音」：之后检测到会议直接开始，不再提醒
+        if self._auto_start_meetings:
+            self._start()
+            return
         self._meeting_prompt_open = True
         threading.Thread(
             target=self._prompt_start, args=(label,), daemon=True
@@ -297,6 +302,8 @@ class TrayApp:
                 default=False,
             )
             if yes and not self.recorder.is_recording:
+                # 记住本次选择：之后检测到会议直接开始，不再提醒（重启后失效）
+                self._auto_start_meetings = True
                 self._start()
         finally:
             self._meeting_prompt_open = False
