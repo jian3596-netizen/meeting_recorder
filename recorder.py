@@ -1,7 +1,7 @@
 """音频录制核心模块。
 
 根据配置录制 "系统扬声器输出(loopback)" 与/或 "麦克风" 两路音频，
-停止时混音并保存为单个 WAV 文件。
+单声道采集（内存占用小），停止时混音并编码为 MP3 保存。
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import wave
 from datetime import datetime
 from pathlib import Path
 
+import lameenc
 import numpy as np
 import soundcard as sc
 
@@ -20,8 +21,10 @@ from config import Config
 log = logging.getLogger("recorder")
 
 SAMPLERATE = 48000
-CHANNELS = 2
-CHUNK = SAMPLERATE // 10  # 100ms 一块
+CHANNELS = 1               # 单声道：会议人声足够，且内存/体积减半
+CHUNK = SAMPLERATE // 10   # 100ms 一块
+MP3_BITRATE = 256          # kbps，对人声几乎无损
+MP3_QUALITY = 2            # 0=最好/最慢，9=最差/最快
 
 
 class RecorderError(Exception):
@@ -114,8 +117,14 @@ class AudioRecorder:
 
         out_dir = self.config.output_path
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"meeting_{datetime.now():%Y%m%d_%H%M%S}.wav"
-        _write_wav(path, mix, SAMPLERATE)
+        stem = f"meeting_{datetime.now():%Y%m%d_%H%M%S}"
+        path = out_dir / f"{stem}.mp3"
+        try:
+            _write_mp3(path, mix, SAMPLERATE)
+        except Exception:  # noqa: BLE001  编码失败也不能丢录音，退回 WAV
+            log.exception("MP3 编码失败，改存 WAV")
+            path = out_dir / f"{stem}.wav"
+            _write_wav(path, mix, SAMPLERATE)
         self.last_file = path
         return path
 
@@ -139,7 +148,10 @@ class AudioRecorder:
         try:
             with microphone.recorder(samplerate=SAMPLERATE, channels=CHANNELS) as rec:
                 while self._recording:
-                    sink.append(rec.record(numframes=CHUNK))
+                    data = rec.record(numframes=CHUNK)  # (frames, 1) float32
+                    mono = data[:, 0] if data.ndim == 2 else data
+                    # 立即转 int16 存储，内存比 float32 再省一半
+                    sink.append((np.clip(mono, -1.0, 1.0) * 32767).astype(np.int16))
         except Exception as exc:  # noqa: BLE001
             log.exception("%s 录制中断", label)
             self._errors.append(f"{label} 录制中断: {exc}")
@@ -153,15 +165,15 @@ class AudioRecorder:
             return None
 
         length = min(len(t) for t in tracks)
-        mixed = np.zeros((length, CHANNELS), dtype=np.float32)
+        acc = np.zeros(length, dtype=np.int32)
         for t in tracks:
-            mixed += t[:length]
+            acc += t[:length].astype(np.int32)
 
-        # 防止削波：峰值超过 1 时整体缩放
-        peak = float(np.max(np.abs(mixed))) if mixed.size else 0.0
-        if peak > 1.0:
-            mixed /= peak
-        return mixed
+        # 防止削波：峰值超过 int16 范围时整体缩放
+        peak = int(np.max(np.abs(acc))) if acc.size else 0
+        if peak > 32767:
+            acc = acc * 32767 // peak
+        return acc.astype(np.int16)
 
     @property
     def errors(self) -> list[str]:
@@ -174,11 +186,22 @@ def _concat(frames: list[np.ndarray]) -> np.ndarray | None:
     return np.concatenate(frames, axis=0)
 
 
+def _write_mp3(path: Path, data: np.ndarray, samplerate: int) -> None:
+    """data：单声道 int16 一维数组。"""
+    encoder = lameenc.Encoder()
+    encoder.set_bit_rate(MP3_BITRATE)
+    encoder.set_in_sample_rate(samplerate)
+    encoder.set_channels(1)
+    encoder.set_quality(MP3_QUALITY)
+    mp3 = encoder.encode(np.ascontiguousarray(data, dtype=np.int16).tobytes())
+    mp3 += encoder.flush()
+    path.write_bytes(bytes(mp3))
+
+
 def _write_wav(path: Path, data: np.ndarray, samplerate: int) -> None:
-    clipped = np.clip(data, -1.0, 1.0)
-    ints = (clipped * 32767).astype(np.int16)
+    """data：单声道 int16 一维数组。"""
     with wave.open(str(path), "wb") as wf:
-        wf.setnchannels(data.shape[1])
+        wf.setnchannels(1)
         wf.setsampwidth(2)  # int16
         wf.setframerate(samplerate)
-        wf.writeframes(ints.tobytes())
+        wf.writeframes(np.ascontiguousarray(data, dtype=np.int16).tobytes())
