@@ -56,7 +56,7 @@ class TrayApp:
         self.config = Config.load()
         self.recorder = AudioRecorder(self.config)
         self.toasts = toast.ToastManager()
-        self._prompt_open = False      # 是否已有「是否录音」气泡在显示
+        self._meeting_prompt_open = False  # 是否已有会议提示气泡在显示（限一个）
         self._last_click: float | None = None  # 上次托盘左键点击时间（识别双击）
         self._dbl_threshold = _double_click_seconds()
         self._warn_timer: threading.Timer | None = None
@@ -279,10 +279,10 @@ class TrayApp:
 
     @_safe_action
     def _on_meeting_start(self, label: str) -> None:
-        # 已在录音 / 已有弹窗时不再打扰
-        if self.recorder.is_recording or self._prompt_open:
+        # 已在录音 / 已有会议提示时不再打扰
+        if self.recorder.is_recording or self._meeting_prompt_open:
             return
-        self._prompt_open = True
+        self._meeting_prompt_open = True
         threading.Thread(
             target=self._prompt_start, args=(label,), daemon=True
         ).start()
@@ -299,27 +299,31 @@ class TrayApp:
             if yes and not self.recorder.is_recording:
                 self._start()
         finally:
-            self._prompt_open = False
+            self._meeting_prompt_open = False
 
     @_safe_action
     def _on_meeting_end(self, label: str) -> None:
         # 会议结束（会议软件停止占用麦克风）：若在录音则询问是否停止
-        if not self.recorder.is_recording:
+        if not self.recorder.is_recording or self._meeting_prompt_open:
             return
+        self._meeting_prompt_open = True
         threading.Thread(
             target=self._prompt_end, args=(label,), daemon=True
         ).start()
 
     @_safe_action
     def _prompt_end(self, label: str) -> None:
-        stop = self.toasts.ask(
-            f"「{label}」会议已结束",
-            "是否停止录音？",
-            [("停止录音", True, "accent"), ("继续录音", False, "normal")],
-            default=False,
-        )
-        if stop and self.recorder.is_recording:
-            self._stop()
+        try:
+            stop = self.toasts.ask(
+                f"「{label}」会议已结束",
+                "是否停止录音？",
+                [("停止录音", True, "accent"), ("继续录音", False, "normal")],
+                default=False,
+            )
+            if stop and self.recorder.is_recording:
+                self._stop()
+        finally:
+            self._meeting_prompt_open = False
 
     # ---- 设置动作 -------------------------------------------------------
     @_safe_action

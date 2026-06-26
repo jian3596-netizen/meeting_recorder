@@ -83,13 +83,16 @@ class MeetingDetector(threading.Thread):
         on_start: Callable[[str], None],
         on_stop: Callable[[str], None],
         interval: float = 3.0,
+        confirm: int = 2,
     ) -> None:
         super().__init__(daemon=True)
         self.on_start = on_start
         self.on_stop = on_stop
         self.interval = interval
+        self.confirm = confirm          # 连续确认次数，过滤瞬时抖动
         self._stop_event = threading.Event()
-        self._active: set[str] = set()
+        self._active: set[str] = set()  # 已确认的活动会议
+        self._pending: dict[str, int] = {}  # 标签 -> 与已确认状态相反的连续次数
         self._primed = False
 
     def run(self) -> None:
@@ -105,11 +108,28 @@ class MeetingDetector(threading.Thread):
                 current = active_meeting_apps()
             except Exception:  # noqa: BLE001
                 continue
-            for label in current - self._active:
+            self._step(current)
+
+    def _step(self, current: set[str]) -> None:
+        """带去抖的状态推进：某个应用的状态需连续 confirm 次一致才认定。"""
+        for label in set(self._active) | current | set(self._pending):
+            committed = label in self._active
+            observed = label in current
+            if observed == committed:
+                self._pending.pop(label, None)  # 与已确认一致，清除抖动计数
+                continue
+            count = self._pending.get(label, 0) + 1
+            if count < self.confirm:
+                self._pending[label] = count
+                continue
+            # 连续确认达到阈值，提交状态变化
+            self._pending.pop(label, None)
+            if observed:
+                self._active.add(label)
                 self._safe(self.on_start, label)
-            for label in self._active - current:
+            else:
+                self._active.discard(label)
                 self._safe(self.on_stop, label)
-            self._active = current
 
     @staticmethod
     def _safe(fn: Callable[[str], None], label: str) -> None:
