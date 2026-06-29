@@ -16,7 +16,7 @@ call uv sync
 if errorlevel 1 goto error
 
 echo [2/2] 打包 exe...
-call uv run pyinstaller --noconfirm --onefile --windowed --name MeetingRecorder --icon icon.ico --collect-all soundcard --collect-all lameenc main.py
+call uv run pyinstaller --noconfirm --onefile --windowed --name MeetingRecorder --icon icon.ico --collect-all soundcard main.py
 if errorlevel 1 goto error
 
 echo.

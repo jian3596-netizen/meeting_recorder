@@ -1,7 +1,7 @@
 """音频录制核心模块。
 
 根据配置录制 "系统扬声器输出(loopback)" 与/或 "麦克风" 两路音频，
-单声道采集（内存占用小），停止时混音并编码为 MP3 保存。
+单声道采集（内存占用小），停止时混音并保存为 WAV。
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import wave
 from datetime import datetime
 from pathlib import Path
 
-import lameenc
 import numpy as np
 import soundcard as sc
 
@@ -23,8 +22,6 @@ log = logging.getLogger("recorder")
 SAMPLERATE = 48000
 CHANNELS = 1               # 单声道：会议人声足够，且内存/体积减半
 CHUNK = SAMPLERATE // 10   # 100ms 一块
-MP3_BITRATE = 256          # kbps，对人声几乎无损
-MP3_QUALITY = 2            # 0=最好/最慢，9=最差/最快
 
 
 class RecorderError(Exception):
@@ -42,6 +39,7 @@ class AudioRecorder:
         self._system_frames: list[np.ndarray] = []
         self._mic_frames: list[np.ndarray] = []
         self._errors: list[str] = []
+        self._active_sources: list[str] = []
         self.last_file: Path | None = None
 
     @property
@@ -63,6 +61,7 @@ class AudioRecorder:
         self._system_frames = []
         self._mic_frames = []
         self._errors = []
+        self._active_sources = []
         self._threads = []
         self._recording = True
 
@@ -76,6 +75,7 @@ class AudioRecorder:
                         daemon=True,
                     )
                 )
+                self._active_sources.append("系统音频")
             except Exception as exc:  # noqa: BLE001
                 log.exception("无法打开系统音频")
                 self._errors.append(f"无法打开系统音频: {exc}")
@@ -90,6 +90,7 @@ class AudioRecorder:
                         daemon=True,
                     )
                 )
+                self._active_sources.append("麦克风")
             except Exception as exc:  # noqa: BLE001
                 log.exception("无法打开麦克风")
                 self._errors.append(f"无法打开麦克风: {exc}")
@@ -118,13 +119,8 @@ class AudioRecorder:
         out_dir = self.config.output_path
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = f"meeting_{datetime.now():%Y%m%d_%H%M%S}"
-        path = out_dir / f"{stem}.mp3"
-        try:
-            _write_mp3(path, mix, SAMPLERATE)
-        except Exception:  # noqa: BLE001  编码失败也不能丢录音，退回 WAV
-            log.exception("MP3 编码失败，改存 WAV")
-            path = out_dir / f"{stem}.wav"
-            _write_wav(path, mix, SAMPLERATE)
+        path = out_dir / f"{stem}.wav"
+        _write_wav(path, mix, SAMPLERATE)
         self.last_file = path
         return path
 
@@ -164,10 +160,10 @@ class AudioRecorder:
         if not tracks:
             return None
 
-        length = min(len(t) for t in tracks)
+        length = max(len(t) for t in tracks)
         acc = np.zeros(length, dtype=np.int32)
         for t in tracks:
-            acc += t[:length].astype(np.int32)
+            acc[:len(t)] += t.astype(np.int32)
 
         # 防止削波：峰值超过 int16 范围时整体缩放
         peak = int(np.max(np.abs(acc))) if acc.size else 0
@@ -179,23 +175,15 @@ class AudioRecorder:
     def errors(self) -> list[str]:
         return list(self._errors)
 
+    @property
+    def active_sources(self) -> list[str]:
+        return list(self._active_sources)
+
 
 def _concat(frames: list[np.ndarray]) -> np.ndarray | None:
     if not frames:
         return None
     return np.concatenate(frames, axis=0)
-
-
-def _write_mp3(path: Path, data: np.ndarray, samplerate: int) -> None:
-    """data：单声道 int16 一维数组。"""
-    encoder = lameenc.Encoder()
-    encoder.set_bit_rate(MP3_BITRATE)
-    encoder.set_in_sample_rate(samplerate)
-    encoder.set_channels(1)
-    encoder.set_quality(MP3_QUALITY)
-    mp3 = encoder.encode(np.ascontiguousarray(data, dtype=np.int16).tobytes())
-    mp3 += encoder.flush()
-    path.write_bytes(bytes(mp3))
 
 
 def _write_wav(path: Path, data: np.ndarray, samplerate: int) -> None:

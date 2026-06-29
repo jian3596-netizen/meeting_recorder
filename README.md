@@ -1,6 +1,6 @@
 # 会议录音机 (Meeting Recorder)
 
-常驻 Windows 系统托盘（右下角）的轻量会议录音工具。可同时录制**系统音频（扬声器输出）**和**麦克风**，混音保存为单个 MP3 文件。
+常驻 Windows 系统托盘（右下角）的轻量会议录音工具。可同时录制**系统音频（扬声器输出）**和**麦克风**，混音保存为单个 WAV 文件。
 
 ## 功能
 
@@ -15,7 +15,7 @@
 - **最大时长 2 小时**：距上限还剩 10 分钟时气泡提示（可选择立即停止），
   到达 2 小时自动停止并保存。
 - 所有提示统一为右下角浅色半透明圆角气泡卡片。
-- 录音保存到 `C:\Users\<你>\Meeting Recordings\meeting_<时间戳>.mp3`。
+- 录音保存到 `C:\Users\<你>\Meeting Recordings\meeting_<时间戳>.wav`。
 
 ## 直接使用（exe）
 
@@ -37,7 +37,7 @@ uv run python main.py
 ```bash
 uv run pyinstaller --noconfirm --onefile --windowed \
     --name MeetingRecorder --icon icon.ico \
-    --collect-all soundcard --collect-all lameenc main.py
+    --collect-all soundcard main.py
 ```
 
 生成的文件位于 `dist\MeetingRecorder.exe`（单文件，约 30 MB）。
@@ -54,7 +54,7 @@ uv run pyinstaller --noconfirm --onefile --windowed \
   当 Teams（`MSTeams…`）/ 腾讯会议（`WeMeetApp.exe`）的 `LastUsedTimeStop` 为 0
   （表示正在占用麦克风）时判定为进入会议。
 - **托盘**：`pystray` + `Pillow` 绘制圆点图标。
-- 输出为 48 kHz、单声道、256 kbps MP3（约 110 MB/小时；编码失败时退回 WAV）。
+- 输出为 48 kHz、单声道、16-bit PCM WAV（约 330 MB/小时，不做有损压缩）。
 
 ## 出错排查
 
@@ -66,7 +66,7 @@ uv run pyinstaller --noconfirm --onefile --windowed \
 ## 已知限制 / 可扩展方向
 
 - 录制的是**默认**扬声器与麦克风；也可在「设置 → 设备」中指定。
-- 全程音频以单声道 int16 缓存在内存中，编码在停止时一次完成；超长会议（数小时）
-  仍会占用一定内存——如有需要可改为边录边编码写盘。
+- 全程音频以单声道 int16 缓存在内存中，停止时混音写盘；超长会议（数小时）
+  仍会占用一定内存——如有需要可改为边录边写盘。
 - 自动探测依赖「麦克风占用」信号：若开会时未开麦（纯听），则不会触发提示。
-- 暂未提供 MP3 压缩、开机自启动等功能，可按需扩展。
+- 暂未提供压缩、开机自启动等功能，可按需扩展。

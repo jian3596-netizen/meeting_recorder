@@ -43,6 +43,8 @@ class Config:
             data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return cls()
+        if not isinstance(data, dict):
+            return cls()
         # 只接受已知字段，忽略多余/缺失项
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in data.items() if k in known})

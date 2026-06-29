@@ -63,6 +63,7 @@ class TrayApp:
         self._warn_timer: threading.Timer | None = None
         self._max_timer: threading.Timer | None = None
         self.detector: MeetingDetector | None = None
+        self._detector_generation = 0
         self.icon = pystray.Icon(
             "meeting_recorder",
             icon=self._make_icon(recording=False),
@@ -208,7 +209,8 @@ class TrayApp:
             return
         self._refresh()
         self._start_duration_timers()
-        self._notify("录音已开始", "正在录制系统音频 + 麦克风")
+        sources = " + ".join(self.recorder.active_sources) or "音频"
+        self._notify("录音已开始", f"正在录制{sources}")
 
     def _stop(self, reason: str | None = None) -> None:
         self._cancel_duration_timers()
@@ -267,16 +269,29 @@ class TrayApp:
     def _start_detector(self) -> None:
         if self.detector is not None:
             return
+        self._detector_generation += 1
+        generation = self._detector_generation
         self.detector = MeetingDetector(
-            on_start=self._on_meeting_start,
-            on_stop=self._on_meeting_end,
+            on_start=lambda label: self._on_detector_start(generation, label),
+            on_stop=lambda label: self._on_detector_stop(generation, label),
         )
         self.detector.start()
 
     def _stop_detector(self) -> None:
         if self.detector is not None:
-            self.detector.stop()
+            detector = self.detector
             self.detector = None
+            self._detector_generation += 1
+            detector.stop()
+            detector.join(timeout=1)
+
+    def _on_detector_start(self, generation: int, label: str) -> None:
+        if generation == self._detector_generation:
+            self._on_meeting_start(label)
+
+    def _on_detector_stop(self, generation: int, label: str) -> None:
+        if generation == self._detector_generation:
+            self._on_meeting_end(label)
 
     @_safe_action
     def _on_meeting_start(self, label: str) -> None:
